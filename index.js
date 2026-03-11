@@ -1,5 +1,8 @@
 const express = require("express");
 const cors = require("cors");
+const fs = require("fs");
+const path = require("path");
+const { exec } = require("child_process");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -7,7 +10,7 @@ const PORT = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json());
 
-// Rotta base per vedere se il servizio funziona
+// Rotta base per controllo
 app.get("/", (req, res) => {
   res.json({ ok: true, message: "VideoViral processor is running" });
 });
@@ -24,12 +27,58 @@ app.post("/process", async (req, res) => {
     console.log("preset_key:", preset_key);
     console.log("pipeline:", pipeline);
 
-    // v1: facciamo finta di lavorare
-    await new Promise((r) => setTimeout(r, 2000));
+    if (!video_url) {
+      return res
+        .status(400)
+        .json({ success: false, error: "video_url is required" });
+    }
 
-    const slug = (preset_key || "output").toString().replace(/\s+/g, "-");
-    const output_url = `https://example.com/videos/${job_id}/${slug}.mp4`;
+    // Directory di lavoro (su Railway /tmp è scrivibile)
+    const workDir = "/tmp";
+    const safeJobId = (job_id || "job")
+      .toString()
+      .replace(/[^a-zA-Z0-9_-]/g, "");
+    const safePreset = (preset_key || "output")
+      .toString()
+      .replace(/[^a-zA-Z0-9_-]/g, "");
+    const inputPath = path.join(workDir, `${safeJobId}-${safePreset}-input.mp4`);
+    const outputPath = path.join(
+      workDir,
+      `${safeJobId}-${safePreset}-output.mp4`
+    );
 
+    console.log("Downloading video to:", inputPath);
+
+    // Scarica il video sorgente
+    await new Promise((resolve, reject) => {
+      exec(`curl -L "${video_url}" -o "${inputPath}"`, (err, stdout, stderr) => {
+        if (err) {
+          console.error("Download error:", err, stderr);
+          return reject(err);
+        }
+        console.log("Download done");
+        resolve(null);
+      });
+    });
+
+    console.log("Running ffmpeg crop 9:16…");
+
+    // Crop al centro + scala 1080x1920 (verticale)
+    const ffmpegCmd = `ffmpeg -y -i "${inputPath}" -vf "crop=in_h*9/16:in_h:(in_w-out_w)/2:0,scale=1080:1920" -preset veryfast "${outputPath}"`;
+    console.log("FFmpeg command:", ffmpegCmd);
+
+    await new Promise((resolve, reject) => {
+      exec(ffmpegCmd, (err, stdout, stderr) => {
+        if (err) {
+          console.error("FFmpeg error:", err, stderr);
+          return reject(err);
+        }
+        console.log("FFmpeg done");
+        resolve(null);
+      });
+    });
+
+    const output_url = `file://${outputPath}`;
     console.log("Generated output_url:", output_url);
 
     res.json({
@@ -41,11 +90,12 @@ app.post("/process", async (req, res) => {
     });
   } catch (err) {
     console.error("Error in /process:", err);
-    res.status(500).json({ success: false, error: "Processing failed" });
+    res
+      .status(500)
+      .json({ success: false, error: "Processing failed" });
   }
 });
 
 app.listen(PORT, () => {
   console.log(`Processor listening on port ${PORT}`);
 });
-
