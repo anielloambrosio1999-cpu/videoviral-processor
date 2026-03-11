@@ -82,12 +82,8 @@ app.post('/process', async (req, res) => {
 
     console.log('FFmpeg done');
 
-    // Placeholder: URL pubblico finto basato sul nome file
-    // TODO: sostituisci fakePublicBase con il tuo dominio / storage reale
-    const fakePublicBase = 'https://example.com/videos';
-    const fileName = path.basename(outputPath);
-    const outputUrl = `${fakePublicBase}/${fileName}`;
-
+    // Per ora: facciamo puntare l'output all'URL del video originale
+    const outputUrl = video_url;
     console.log('Returning output_url to edge function:', outputUrl);
 
     return res.json({
@@ -113,8 +109,6 @@ app.get('/', (_req, res) => {
 app.listen(PORT, () => {
   console.log(`Processor listening on port ${PORT}`);
 });
-
-
 
 
 
