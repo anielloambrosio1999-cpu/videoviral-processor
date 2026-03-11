@@ -1,7 +1,6 @@
-// index.js - Video processor per Railway in CommonJS (niente Supabase)
+// index.js - Video processor per Railway in CommonJS (usa fetch nativo, niente Supabase)
 
 const express = require('express');
-const fetch = require('node-fetch');
 const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
@@ -25,7 +24,6 @@ app.post('/process', async (req, res) => {
       return res.status(400).json({ error: 'video_url is required' });
     }
 
-    // 1) Scarica il video in /tmp
     const safeJobId = job_id || 'job';
     const safePreset = preset_key || 'preset';
 
@@ -49,7 +47,6 @@ app.post('/process', async (req, res) => {
 
     console.log('Download done');
 
-    // 2) Crop 9:16 + export 1080x1920 con ffmpeg
     console.log('Running ffmpeg crop 9:16…');
 
     const ffmpegArgs = [
@@ -72,7 +69,6 @@ app.post('/process', async (req, res) => {
 
       ff.on('close', (code, signal) => {
         console.log('ffmpeg closed. code:', code, 'signal:', signal);
-        // Trattiamo anche SIGKILL come "ok" se il file è stato creato
         if (code === 0 || signal === 'SIGKILL') {
           resolve();
         } else {
@@ -83,15 +79,12 @@ app.post('/process', async (req, res) => {
 
     console.log('FFmpeg done');
 
-    // 3) Placeholder: genera un URL pubblico finto basato sul nome file.
-    // Sostituisci fakePublicBase con il tuo dominio / storage reale.
-    const fakePublicBase = 'https://example.com/videos'; // TODO: cambia con il tuo
+    const fakePublicBase = 'https://example.com/videos'; // TODO: sostituisci con storage reale
     const fileName = path.basename(outputPath);
     const outputUrl = `${fakePublicBase}/${fileName}`;
 
     console.log('Returning output_url to edge function:', outputUrl);
 
-    // 4) Risposta JSON per la edge function Supabase
     return res.json({
       ok: true,
       job_id,
@@ -115,8 +108,6 @@ app.get('/', (_req, res) => {
 app.listen(PORT, () => {
   console.log(`Processor listening on port ${PORT}`);
 });
-
-
 
 
 
