@@ -4,6 +4,7 @@ const express = require('express');
 const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
+const { Readable } = require('stream');
 
 const app = express();
 const PORT = process.env.PORT || 8080;
@@ -39,9 +40,11 @@ app.post('/process', async (req, res) => {
     }
 
     await new Promise((resolve, reject) => {
+      const nodeStream = Readable.fromWeb(response.body);
       const fileStream = fs.createWriteStream(inputPath);
-      response.body.pipe(fileStream);
-      response.body.on('error', reject);
+
+      nodeStream.pipe(fileStream);
+      nodeStream.on('error', reject);
       fileStream.on('finish', resolve);
     });
 
@@ -79,7 +82,9 @@ app.post('/process', async (req, res) => {
 
     console.log('FFmpeg done');
 
-    const fakePublicBase = 'https://example.com/videos'; // TODO: sostituisci con storage reale
+    // Placeholder: URL pubblico finto basato sul nome file
+    // TODO: sostituisci fakePublicBase con il tuo dominio / storage reale
+    const fakePublicBase = 'https://example.com/videos';
     const fileName = path.basename(outputPath);
     const outputUrl = `${fakePublicBase}/${fileName}`;
 
@@ -108,6 +113,9 @@ app.get('/', (_req, res) => {
 app.listen(PORT, () => {
   console.log(`Processor listening on port ${PORT}`);
 });
+
+
+
 
 
 
