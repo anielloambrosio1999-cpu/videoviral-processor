@@ -1,20 +1,15 @@
-// index.js - Video processor per Railway SENZA Supabase
+// index.js - Video processor per Railway in CommonJS (niente Supabase)
 
-import express from 'express';
-import fetch from 'node-fetch';
-import { spawn } from 'child_process';
-import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
+const express = require('express');
+const fetch = require('node-fetch');
+const { spawn } = require('child_process');
+const fs = require('fs');
+const path = require('path');
 
 const app = express();
 const PORT = process.env.PORT || 8080;
 
 app.use(express.json());
-
-// Util per avere __dirname in ES modules
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 app.post('/process', async (req, res) => {
   console.log('=== New /process call ===');
@@ -31,8 +26,11 @@ app.post('/process', async (req, res) => {
     }
 
     // 1) Scarica il video in /tmp
-    const inputPath = `/tmp/${job_id || 'job'}-${preset_key || 'preset'}-input.mp4`;
-    const outputPath = `/tmp/${job_id || 'job'}-${preset_key || 'preset'}-output.mp4`;
+    const safeJobId = job_id || 'job';
+    const safePreset = preset_key || 'preset';
+
+    const inputPath = `/tmp/${safeJobId}-${safePreset}-input.mp4`;
+    const outputPath = `/tmp/${safeJobId}-${safePreset}-output.mp4`;
 
     console.log(`Downloading video to: ${inputPath}`);
 
@@ -42,8 +40,8 @@ app.post('/process', async (req, res) => {
       return res.status(400).json({ error: 'Failed to download video' });
     }
 
-    const fileStream = fs.createWriteStream(inputPath);
     await new Promise((resolve, reject) => {
+      const fileStream = fs.createWriteStream(inputPath);
       response.body.pipe(fileStream);
       response.body.on('error', reject);
       fileStream.on('finish', resolve);
@@ -51,8 +49,9 @@ app.post('/process', async (req, res) => {
 
     console.log('Download done');
 
-    // 2) Applica il crop 9:16 + export 1080x1920 con ffmpeg
+    // 2) Crop 9:16 + export 1080x1920 con ffmpeg
     console.log('Running ffmpeg crop 9:16…');
+
     const ffmpegArgs = [
       '-y',
       '-i', inputPath,
@@ -84,14 +83,9 @@ app.post('/process', async (req, res) => {
 
     console.log('FFmpeg done');
 
-    // 3) A questo punto IL TUO SISTEMA deve caricare outputPath su uno storage
-    //    esterno (S3, Bunny, ecc.) e ottenere un URL pubblico.
-    //    Per ora, come placeholder, simuliamo un URL basato sul nome file.
-    //
-    // IMPORTANTE: sostituisci questa parte con il tuo vero upload
-    // e metti qui l'URL HTTP/HTTPS finale accessibile dal browser.
-
-    const fakePublicBase = 'https://example.com/videos'; // <-- cambia con il tuo dominio / storage
+    // 3) Placeholder: genera un URL pubblico finto basato sul nome file.
+    // Sostituisci fakePublicBase con il tuo dominio / storage reale.
+    const fakePublicBase = 'https://example.com/videos'; // TODO: cambia con il tuo
     const fileName = path.basename(outputPath);
     const outputUrl = `${fakePublicBase}/${fileName}`;
 
