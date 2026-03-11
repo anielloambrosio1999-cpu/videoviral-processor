@@ -3,6 +3,7 @@ const cors = require("cors");
 const fs = require("fs");
 const path = require("path");
 const { spawn } = require("child_process");
+const { Readable } = require("stream");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -24,19 +25,26 @@ async function downloadVideo(videoUrl, outputPath) {
     throw new Error(`Download failed, status: ${res.status}`);
   }
 
+  // In Node 18 fetch usa Web Streams, quindi li convertiamo in stream Node
+  const nodeStream = Readable.fromWeb(res.body);
+
   await new Promise((resolve, reject) => {
     const fileStream = fs.createWriteStream(outputPath);
-    res.body.pipe(fileStream);
-    res.body.on("error", (err) => {
+
+    nodeStream.pipe(fileStream);
+    nodeStream.on("error", (err) => {
       console.error("Stream error while downloading:", err);
       reject(err);
     });
     fileStream.on("finish", () => {
-      fileStream.close(() => resolve());
+      console.log("Download done");
+      resolve();
+    });
+    fileStream.on("error", (err) => {
+      console.error("File write error:", err);
+      reject(err);
     });
   });
-
-  console.log("Download done");
 }
 
 // Esegue ffmpeg per crop 9:16 e scala 1080x1920 (come prima)
@@ -71,7 +79,7 @@ async function runFfmpeg(inputPath, outputPath) {
       console.log("ffmpeg exited with code", code);
       if (code === 0) {
         console.log("FFmpeg done");
-        resolve(null);
+        resolve();
       } else {
         reject(new Error(`ffmpeg failed with code ${code}`));
       }
@@ -143,5 +151,6 @@ app.post("/process", async (req, res) => {
 app.listen(PORT, () => {
   console.log(`Processor listening on port ${PORT}`);
 });
+
 
 
