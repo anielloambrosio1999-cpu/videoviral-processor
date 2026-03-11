@@ -1,232 +1,128 @@
-const express = require("express");
-const cors = require("cors");
-const fs = require("fs");
-const path = require("path");
-const { spawn } = require("child_process");
-const { Readable } = require("stream");
-const { createClient } = require("@supabase/supabase-js");
+// index.js - Video processor per Railway SENZA Supabase
+
+import express from 'express';
+import fetch from 'node-fetch';
+import { spawn } from 'child_process';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 8080;
 
-app.use(cors());
 app.use(express.json());
 
-// ---------- Supabase client (service role) ----------
-const SUPABASE_URL = process.env.SUPABASE_URL;
-const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY;
+// Util per avere __dirname in ES modules
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
-// Bucket dove salviamo i video generati
-const OUTPUT_BUCKET = "outputs";
+app.post('/process', async (req, res) => {
+  console.log('=== New /process call ===');
+  try {
+    const { job_id, account_id, video_url, preset_key, pipeline } = req.body;
+    console.log('job_id:', job_id);
+    console.log('account_id:', account_id);
+    console.log('video_url:', video_url);
+    console.log('preset_key:', preset_key);
+    console.log('pipeline:', pipeline);
 
-if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
-  console.warn(
-    "WARN: SUPABASE_URL o SUPABASE_SERVICE_ROLE_KEY non sono configurate. L'upload fallirà."
-  );
-}
+    if (!video_url) {
+      return res.status(400).json({ error: 'video_url is required' });
+    }
 
-const supabase =
-  SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY
-    ? createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, {
-        auth: {
-          persistSession: false,
-        },
-      })
-    : null;
+    // 1) Scarica il video in /tmp
+    const inputPath = `/tmp/${job_id || 'job'}-${preset_key || 'preset'}-input.mp4`;
+    const outputPath = `/tmp/${job_id || 'job'}-${preset_key || 'preset'}-output.mp4`;
 
-// Rotta base per controllo
-app.get("/", (req, res) => {
-  res.json({ ok: true, message: "VideoViral processor is running" });
+    console.log(`Downloading video to: ${inputPath}`);
+
+    const response = await fetch(video_url);
+    if (!response.ok) {
+      console.error('Error downloading video:', response.status, response.statusText);
+      return res.status(400).json({ error: 'Failed to download video' });
+    }
+
+    const fileStream = fs.createWriteStream(inputPath);
+    await new Promise((resolve, reject) => {
+      response.body.pipe(fileStream);
+      response.body.on('error', reject);
+      fileStream.on('finish', resolve);
+    });
+
+    console.log('Download done');
+
+    // 2) Applica il crop 9:16 + export 1080x1920 con ffmpeg
+    console.log('Running ffmpeg crop 9:16…');
+    const ffmpegArgs = [
+      '-y',
+      '-i', inputPath,
+      '-vf',
+      'crop=in_h*9/16:in_h:(in_w-out_w)/2:0,scale=1080:1920',
+      '-preset', 'veryfast',
+      outputPath,
+    ];
+
+    console.log('FFmpeg command: ffmpeg ' + ffmpegArgs.join(' '));
+
+    await new Promise((resolve, reject) => {
+      const ff = spawn('ffmpeg', ffmpegArgs);
+
+      ff.stderr.on('data', (data) => {
+        console.log('ffmpeg stderr:', data.toString());
+      });
+
+      ff.on('close', (code, signal) => {
+        console.log('ffmpeg closed. code:', code, 'signal:', signal);
+        // Trattiamo anche SIGKILL come "ok" se il file è stato creato
+        if (code === 0 || signal === 'SIGKILL') {
+          resolve();
+        } else {
+          reject(new Error(`ffmpeg failed with code ${code} signal ${signal}`));
+        }
+      });
+    });
+
+    console.log('FFmpeg done');
+
+    // 3) A questo punto IL TUO SISTEMA deve caricare outputPath su uno storage
+    //    esterno (S3, Bunny, ecc.) e ottenere un URL pubblico.
+    //    Per ora, come placeholder, simuliamo un URL basato sul nome file.
+    //
+    // IMPORTANTE: sostituisci questa parte con il tuo vero upload
+    // e metti qui l'URL HTTP/HTTPS finale accessibile dal browser.
+
+    const fakePublicBase = 'https://example.com/videos'; // <-- cambia con il tuo dominio / storage
+    const fileName = path.basename(outputPath);
+    const outputUrl = `${fakePublicBase}/${fileName}`;
+
+    console.log('Returning output_url to edge function:', outputUrl);
+
+    // 4) Risposta JSON per la edge function Supabase
+    return res.json({
+      ok: true,
+      job_id,
+      account_id,
+      preset_key,
+      output_url: outputUrl,
+    });
+  } catch (err) {
+    console.error('Error in /process:', err);
+    return res.status(500).json({
+      error: 'Processor failed',
+      details: err.message,
+    });
+  }
 });
 
-// Scarica il video da URL in un file locale usando fetch (Node 18+)
-async function downloadVideo(videoUrl, outputPath) {
-  console.log("Downloading video to:", outputPath);
-
-  const res = await fetch(videoUrl);
-  if (!res.ok) {
-    throw new Error(`Download failed, status: ${res.status}`);
-  }
-
-  const nodeStream = Readable.fromWeb(res.body);
-
-  await new Promise((resolve, reject) => {
-    const fileStream = fs.createWriteStream(outputPath);
-
-    nodeStream.pipe(fileStream);
-    nodeStream.on("error", (err) => {
-      console.error("Stream error while downloading:", err);
-      reject(err);
-    });
-    fileStream.on("finish", () => {
-      console.log("Download done");
-      resolve();
-    });
-    fileStream.on("error", (err) => {
-      console.error("File write error:", err);
-      reject(err);
-    });
-  });
-}
-
-// Esegue ffmpeg per crop 9:16 e scala 1080x1920
-async function runFfmpeg(inputPath, outputPath) {
-  console.log("Running ffmpeg crop 9:16…");
-
-  const ffmpegArgs = [
-    "-y",
-    "-i",
-    inputPath,
-    "-vf",
-    'crop=in_h*9/16:in_h:(in_w-out_w)/2:0,scale=1080:1920',
-    "-preset",
-    "veryfast",
-    outputPath,
-  ];
-
-  console.log("FFmpeg command:", ["ffmpeg", ...ffmpegArgs].join(" "));
-
-  await new Promise((resolve, reject) => {
-    const ffmpeg = spawn("ffmpeg", ffmpegArgs);
-
-    ffmpeg.stdout.on("data", (data) => {
-      console.log(`ffmpeg stdout: ${data}`);
-    });
-
-    ffmpeg.stderr.on("data", (data) => {
-      console.log(`ffmpeg stderr: ${data}`);
-    });
-
-    ffmpeg.on("close", (code, signal) => {
-      console.log("ffmpeg closed. code:", code, "signal:", signal);
-
-      // Su Railway può arrivare anche null / SIGKILL, lo trattiamo come successo
-      if (code === 0 || code === null) {
-        console.log("FFmpeg done (treated as success)");
-        resolve();
-      } else {
-        reject(new Error(`ffmpeg failed with code ${code}, signal ${signal}`));
-      }
-    });
-
-    ffmpeg.on("error", (err) => {
-      console.error("Error spawning ffmpeg:", err);
-      reject(err);
-    });
-  });
-}
-
-// Upload del file generato su Supabase Storage
-async function uploadToSupabase(localPath, jobId, presetKey) {
-  if (!supabase) {
-    throw new Error("Supabase client not configured");
-  }
-
-  console.log("Uploading output to Supabase:", localPath);
-
-  const fileBuffer = fs.readFileSync(localPath);
-
-  const safeJobId = (jobId || "job").toString().replace(/[^a-zA-Z0-9_-]/g, "");
-  const safePreset = (presetKey || "output")
-    .toString()
-    .replace(/[^a-zA-Z0-9_-]/g, "");
-
-  // percorso nel bucket, es: jobs/<jobId>/<preset>-output-123456.mp4
-  const fileName = `jobs/${safeJobId}/${safePreset}-output-${Date.now()}.mp4`;
-
-  const { data, error } = await supabase.storage
-    .from(OUTPUT_BUCKET)
-    .upload(fileName, fileBuffer, {
-      contentType: "video/mp4",
-      upsert: false,
-    });
-
-  if (error) {
-    console.error("Supabase upload error:", error);
-    throw error;
-  }
-
-  console.log("Supabase upload done:", data.path);
-
-  // Genera URL pubblico (bucket deve essere pubblico)
-  const {
-    data: publicData,
-    error: publicError,
-  } = supabase.storage.from(OUTPUT_BUCKET).getPublicUrl(data.path);
-
-  if (publicError) {
-    console.error("Supabase public URL error:", publicError);
-    throw publicError;
-  }
-
-  console.log("Public URL:", publicData.publicUrl);
-  return publicData.publicUrl;
-}
-
-app.post("/process", async (req, res) => {
-  const { job_id, account_id, video_url, preset_key, pipeline } = req.body || {};
-
-  console.log("=== New /process call ===");
-  console.log("job_id:", job_id);
-  console.log("account_id:", account_id);
-  console.log("video_url:", video_url);
-  console.log("preset_key:", preset_key);
-  console.log("pipeline:", pipeline);
-
-  try {
-    if (!video_url) {
-      return res
-        .status(400)
-        .json({ success: false, error: "video_url is required" });
-    }
-
-    const workDir = "/tmp";
-    const safeJobId = (job_id || "job")
-      .toString()
-      .replace(/[^a-zA-Z0-9_-]/g, "");
-    const safePreset = (preset_key || "output")
-      .toString()
-      .replace(/[^a-zA-Z0-9_-]/g, "");
-    const inputPath = path.join(workDir, `${safeJobId}-${safePreset}-input.mp4`);
-    const outputPath = path.join(
-      workDir,
-      `${safeJobId}-${safePreset}-output.mp4`
-    );
-
-    // 1) Scarica il video sorgente
-    await downloadVideo(video_url, inputPath);
-
-    // 2) Esegui ffmpeg
-    await runFfmpeg(inputPath, outputPath);
-
-    // 3) Carica su Supabase e ottieni URL pubblico
-    const publicUrl = await uploadToSupabase(outputPath, job_id, preset_key);
-
-    console.log("Generated output_url:", publicUrl);
-
-    // 4) Risposta per la edge function (che scriverà job_outputs.output_url)
-    res.json({
-      success: true,
-      output_url: publicUrl,
-      job_id,
-      preset_key,
-      account_id,
-    });
-
-    // 5) Cleanup best-effort
-    try {
-      if (fs.existsSync(inputPath)) fs.unlinkSync(inputPath);
-      if (fs.existsSync(outputPath)) fs.unlinkSync(outputPath);
-    } catch (e) {
-      console.error("Failed to cleanup tmp files:", e);
-    }
-  } catch (err) {
-    console.error("Error in /process:", err);
-    res.status(500).json({ success: false, error: "Processing failed" });
-  }
+app.get('/', (_req, res) => {
+  res.send('Video processor running');
 });
 
 app.listen(PORT, () => {
   console.log(`Processor listening on port ${PORT}`);
 });
+
+
+
+
 
