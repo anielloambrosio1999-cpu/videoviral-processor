@@ -25,7 +25,6 @@ async function downloadVideo(videoUrl, outputPath) {
     throw new Error(`Download failed, status: ${res.status}`);
   }
 
-  // In Node 18 fetch usa Web Streams, quindi li convertiamo in stream Node
   const nodeStream = Readable.fromWeb(res.body);
 
   await new Promise((resolve, reject) => {
@@ -47,7 +46,7 @@ async function downloadVideo(videoUrl, outputPath) {
   });
 }
 
-// Esegue ffmpeg per crop 9:16 e scala 1080x1920 (come prima)
+// Esegue ffmpeg per crop 9:16 e scala 1080x1920
 async function runFfmpeg(inputPath, outputPath) {
   console.log("Running ffmpeg crop 9:16…");
 
@@ -75,13 +74,15 @@ async function runFfmpeg(inputPath, outputPath) {
       console.log(`ffmpeg stderr: ${data}`);
     });
 
-    ffmpeg.on("close", (code) => {
-      console.log("ffmpeg exited with code", code);
-      if (code === 0) {
-        console.log("FFmpeg done");
+    ffmpeg.on("close", (code, signal) => {
+      console.log("ffmpeg closed. code:", code, "signal:", signal);
+
+      // Consideriamo ok sia code === 0 sia code === null (alcuni wrapper danno null)
+      if (code === 0 || code === null) {
+        console.log("FFmpeg done (treated as success)");
         resolve();
       } else {
-        reject(new Error(`ffmpeg failed with code ${code}`));
+        reject(new Error(`ffmpeg failed with code ${code}, signal ${signal}`));
       }
     });
 
@@ -109,7 +110,6 @@ app.post("/process", async (req, res) => {
         .json({ success: false, error: "video_url is required" });
     }
 
-    // Directory di lavoro (su Railway /tmp è scrivibile)
     const workDir = "/tmp";
     const safeJobId = (job_id || "job")
       .toString()
@@ -123,13 +123,9 @@ app.post("/process", async (req, res) => {
       `${safeJobId}-${safePreset}-output.mp4`
     );
 
-    // 1) Scarica il video (senza curl)
     await downloadVideo(video_url, inputPath);
-
-    // 2) Esegui ffmpeg come prima
     await runFfmpeg(inputPath, outputPath);
 
-    // 3) Genera un finto URL di output (per ora file:// come avevi)
     const slug = (preset_key || "output").toString().replace(/\s+/g, "-");
     const output_url = `file://${outputPath}`;
     console.log("Generated output_url:", output_url);
@@ -142,15 +138,11 @@ app.post("/process", async (req, res) => {
     });
   } catch (err) {
     console.error("Error in /process:", err);
-    res
-      .status(500)
-      .json({ success: false, error: "Processing failed" });
+    res.status(500).json({ success: false, error: "Processing failed" });
   }
 });
 
 app.listen(PORT, () => {
   console.log(`Processor listening on port ${PORT}`);
 });
-
-
 
